@@ -1,0 +1,164 @@
+#!/bin/bash
+
+check_table_exists() {
+    if [[ ! -f "$table_data" ]]; then
+        echo "Table doesn't exist"
+        exit 1
+    fi
+}
+
+match_col() {
+    col_number=$(awk -F: -v value="$1" 'BEGIN {IGNORECASE=1} $1 == value {print NR; exit}' "$table_meta") 
+    col_type=$(awk -F: -v value="$1" 'BEGIN {IGNORECASE=1} $1 == value {print $2; exit}' "$table_meta")   
+    primary=$(awk -F: -v value="$1" 'BEGIN {IGNORECASE=1} $1 == value {print $3; exit}' "$table_meta")
+}
+
+get_type() {
+    if [[ "$1" =~ ^[0-9]+$ ]]; then 
+        echo int
+    else
+        echo string
+    fi
+}
+
+check_for_primary_duplication() {
+    mapfile -t record_ids < <(cut -d ':' -f "$col_number" "$table_data")
+    record_ids=("${record_ids[@]:1}")  # Remove header from array
+
+    for id in "${record_ids[@]}"; do
+        if [[ "$id" == "$update_value" ]]; then
+            echo "Error: Duplicate primary key violation"
+            exit 1
+        fi
+    done
+}
+
+update_records() {
+    
+    awk -F: -v column="$update_col" -v value="$update_value" -v primary_col="$primary_col" '
+        BEGIN {OFS = FS}
+        NR == 1 {print; next} # Always print the header
+        {
+            # Apply the condition dynamically to rows beyond the header
+            if ('"$conditions"') {
+                # If updating the primary key, ensure no duplicates
+                if (column == primary_col) {
+                    new_values[$column]++;
+                    if (new_values[$column] > 1) {
+                        print "Error: Duplicate primary key violation" > "/dev/stderr";
+                        exit 1;
+                    }
+                }
+                $column = value; # Update the specified column
+            }
+            print; # Print the modified or unmodified line
+        }
+    ' "$table_data" > "${table_data}.tmp" && mv "${table_data}.tmp" "$table_data"
+}
+
+if (( $# != 3 )); then
+    echo "Usage: $0 <table_name> <update_column=new_value> <condition>"
+    exit 1
+fi
+
+table_data=${1}.data
+table_meta=${1}.meta
+check_table_exists
+
+# Parse the update column and value
+update_pair="$2"
+if [[ ! $update_pair =~ ^([a-zA-Z0-9_]+)=(.+)$ ]]; then
+    echo "Invalid update syntax. Use <column_name>=<new_value>"
+    exit 1
+fi
+
+update_col_name="${BASH_REMATCH[1]}"
+update_value="${BASH_REMATCH[2]}"
+
+match_col "$update_col_name"
+if [[ "$primary" == "T" ]]; then
+    check_for_primary_duplication
+fi
+update_col=$((col_number)) # Adjust column index for awk (1-based)
+update_type=$(get_type "$update_value")
+
+if [[ "$col_type" != "$update_type" ]]; then
+    echo "Type mismatch: Column expects $col_type but provided value is $update_type"
+    exit 1
+fi
+
+# Process the condition
+condition="$3"
+conditions=''
+if [[ $condition =~ (^|[^a-zA-Z0-9])AND($|[^a-zA-Z0-9]) ]]; then
+    subconditions=($condition)
+    for subcond in "${subconditions[@]}"; do
+        if [[ $subcond =~ ^([a-zA-Z0-9_]+)([!=<>]=?|=)(.+)$ ]]; then
+            column="${BASH_REMATCH[1]}"
+            operator="${BASH_REMATCH[2]}"
+            value="${BASH_REMATCH[3]}"
+            match_col "$column"
+            type=$(get_type "$value")
+            if [[ "$col_type" != "$type" ]]; then
+                echo "Unmatched data types: Please check entered values"
+                exit 1
+            fi
+            if [[ "$operator" == "=" ]]; then
+                operator='=='
+            fi
+            column=$((col_number)) # Adjust for awk
+            [[ -n $conditions ]] && conditions="$conditions && "
+            conditions="$conditions \$$column $operator \"$value\""
+        elif [[ "$subcond" != "AND" ]]; then
+            echo "Invalid condition syntax"
+            exit 1 
+        fi
+    done
+elif [[ $condition =~ (^|[^a-zA-Z0-9])OR($|[^a-zA-Z0-9]) ]]; then
+    subconditions=($condition)
+    for subcond in "${subconditions[@]}"; do
+        if [[ $subcond =~ ^([a-zA-Z0-9_]+)([!=<>]=?|=)(.+)$ ]]; then
+            column="${BASH_REMATCH[1]}"
+            operator="${BASH_REMATCH[2]}"
+            value="${BASH_REMATCH[3]}"
+            match_col "$column"
+            type=$(get_type "$value")
+            if [[ "$col_type" != "$type" ]]; then
+                echo "Unmatched data types: Please check entered values"
+                exit 1
+            fi
+            if [[ "$operator" == "=" ]]; then
+                operator='=='
+            fi
+            column=$((col_number)) # Adjust for awk
+            [[ -n $conditions ]] && conditions="$conditions || "
+            conditions="$conditions \$$column $operator \"$value\""
+        elif [[ "$subcond" != "OR" ]]; then
+            echo "Invalid condition syntax"
+            exit 1 
+        fi
+    done
+elif [[ $condition =~ ^([a-zA-Z0-9_]+)([!=<>]=?|=)(.+)$ ]]; then
+    column="${BASH_REMATCH[1]}"
+    operator="${BASH_REMATCH[2]}"
+    value="${BASH_REMATCH[3]}"
+    match_col "$column"
+    type=$(get_type "$value")
+    if [[ "$col_type" != "$type" ]]; then
+        echo "Unmatched data types: Please check entered values"
+        exit 1
+    fi
+    if [[ "$operator" == "=" ]]; then
+        operator='=='
+    fi
+    column=$((col_number)) # Adjust for awk
+    conditions="\$$column $operator \"$value\""
+else
+    echo "Invalid condition syntax"
+    exit 1
+fi
+
+# Perform the update
+update_records
+
+echo "Update completed successfully."

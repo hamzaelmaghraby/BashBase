@@ -1,0 +1,173 @@
+#! /usr/bin/bash 
+
+: <<'COMMENT'
+check_table_exists() {
+    if [[ ! -f "$table_meta" ]]; then
+        echo "Table doesn't exist"
+        exit 1
+    fi
+}
+
+
+check_table_exists() {
+    if [[ ! -f "${table_meta}" ]]; then
+        echo "Table doesn't exist."
+        exit 1
+    fi
+}
+
+
+check_col_match (){
+
+    col_count=$(wc -l < "$table_meta")
+    #col_count=$((col_count - 1))
+    if (( $col_count != ${#values[@]} ));then
+            echo "unmatched column: please check entered values"
+            exit 1
+    fi
+}
+
+get_type() {
+    if [[ "$1" =~ ^[0-9]+$ ]]; then 
+        echo int
+    else
+        echo string
+    fi
+}
+
+check_data_type_match(){
+    # get data-type for each column
+    mapfile -t table_data_types < <(cut -d ':' -f 2 "$table_meta")
+    table_data_types=("${table_data_types[@]:1}")  # remove header from array
+
+    for i in "${!values[@]}"; do
+        type=$(get_type "${values[$i]}")
+        if [[ "${table_data_types[$i]}" != "$type" ]]; then
+            echo "Unmatched data types: Please check entered values"
+            exit 1
+        fi
+    done
+}
+
+
+check_for_id_duplication(){
+    # get ID for each record
+    mapfile -t record_ids < <(cut -d ':' -f 1 "$table_data")
+    record_ids=("${record_ids[@]:1}")  # remove header from array
+
+    for i in "${!record_ids[@]}"; do
+        if (( ${record_ids[$i]} == ${values[0]})); then
+            echo "duplicate entry"
+            exit 1
+        fi
+    done
+}
+
+insert(){
+    printf "\n" >> $table_data
+    for i in "${!values[@]}"; do
+        if [[ $i -ne $((${#values[@]} - 1)) ]]; then
+            printf "%s:" "${values[$i]}" >> $table_data
+        else
+            printf "%s" "${values[$i]}" >> $table_data
+        fi
+    done
+}
+
+if (( $# != 2)) ;then
+    echo "invalid Input : please Enter Table name followed by values separated by ',' "
+else
+    table_meta=${1}.meta
+    table_data=${1}.data
+    # Set IFS to comma to split the string
+    IFS=',' read -r -a values <<< $2
+
+    check_table_exists
+    check_col_match
+    check_data_type_match
+    check_for_id_duplication
+    insert    
+fi
+COMMENT
+
+
+check_table_exists() {
+    if [[ ! -f "$table_meta" ]]; then
+        echo "Table doesn't exist"
+        exit 1
+    fi
+}
+
+check_col_match() {
+    col_count=$(wc -l < "$table_meta")
+    if (( col_count != ${#values[@]} )); then
+        echo "Unmatched column: Please check entered values."
+        exit 1
+    fi
+}
+
+get_type() {
+    if [[ "$1" =~ ^[0-9]+$ ]]; then 
+        echo int
+    else
+        echo string
+    fi
+}
+
+check_data_type_match() {
+    mapfile -t table_data_types < <(cut -d ':' -f 2 "$table_meta")
+    table_data_types=("${table_data_types[@]}")  # Remove header from array
+
+    for i in "${!values[@]}"; do
+        type=$(get_type "${values[$i]}")
+        if [[ "${table_data_types[$i]}" != "$type" ]]; then
+            echo "Unmatched data types: Please check entered values."
+            echo $type 
+            echo  $table_data_types[$i]
+            exit 1
+        fi
+    done
+}
+
+check_for_id_duplication() {
+    mapfile -t record_ids < <(cut -d ':' -f 1 "$table_data")
+    record_ids=("${record_ids[@]:1}")  # Remove header from array
+
+    for id in "${record_ids[@]}"; do
+        if [[ "$id" == "${values[0]}" ]]; then
+            echo "Duplicate entry for ID: ${values[0]}"
+            exit 1
+        fi
+    done
+}
+
+insert() {
+    
+    for i in "${!values[@]}"; do
+        if [[ $i -ne $((${#values[@]} - 1)) ]]; then
+            printf "%s:" "${values[$i]}" >> "$table_data"
+        else
+            printf "%s" "${values[$i]}" >> "$table_data"
+        fi
+    done
+    printf "\n" >> "$table_data"
+}
+
+# Main logic
+if (( $# != 2 )); then
+    echo "Invalid input: Please enter table name followed by values separated by ':'."
+    exit 1
+else
+    table_meta="${1}.meta"
+    table_data="${1}.data"
+
+    # Use `:` as the delimiter
+    IFS=':' read -r -a values <<< "$2"
+
+    check_table_exists
+    check_col_match
+    check_data_type_match
+    check_for_id_duplication
+    insert
+    echo "Data inserted successfully."
+fi

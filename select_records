@@ -1,0 +1,129 @@
+#!/bin/bash
+
+check_table_exists() {
+    if [[ ! -f "$table_data" ]]; then
+        echo "Table doesn't exist"
+        exit 1
+    fi
+}
+
+
+select_all_records(){
+    sed  '1d' $table_data
+}
+
+
+match_col(){
+    col_number=$(awk -F: -v value="$1" 'BEGIN {IGNORECASE=1} $1 == value {print NR; exit}' "$table_meta") 
+    col_type=$(awk -F: -v value="$1" 'BEGIN {IGNORECASE=1} $1 == value {print $2; exit}' "$table_meta")   
+}
+
+get_type() {
+    if [[ "$1" =~ ^[0-9]+$ ]]; then 
+        echo int
+    else
+        echo string
+    fi
+}
+
+select_by_col(){
+    awk -F: "($conditions)" $table_data 
+}
+
+
+
+if (( $# != 2 )); then
+    echo "invalid input"
+else
+    table_data=${1}.data
+    table_meta=${1}.meta
+    check_table_exists
+    conditions=''
+    condition=$2
+    if [[ "$condition" == "'*'" ]]; then
+        
+        select_all_records
+    elif [[ $condition =~ (^|[^a-zA-Z0-9])AND($|[^a-zA-Z0-9]) ]]; then
+        
+        subconditions=($condition)
+        for subcond in "${subconditions[@]}"; do
+        if [[ $subcond =~ ^([a-zA-Z0-9_]+)([!=<>]=?|=)(.+)$ ]]; then
+            column="${BASH_REMATCH[1]}"
+            operator="${BASH_REMATCH[2]}"
+            value="${BASH_REMATCH[3]}"
+            match_col $column
+            type=$(get_type $value)
+            if [[ "$col_type" != "$type" ]]; then
+                echo "Unmatched data types: Please check entered values"
+                exit 1
+            fi
+            if [[ "$operator" == "=" ]]; then
+                operator='=='
+            fi
+            column=$col_number
+            [[ -n $conditions ]] && conditions="$conditions && "
+            conditions="$conditions \$$column $operator \"$value\""
+        elif [[ "$subcond" != "AND" ]]; then
+            echo "invalid input"
+            exit 1 
+        fi
+        done
+        
+        select_by_col
+    elif [[ $condition =~ (^|[^a-zA-Z0-9])OR($|[^a-zA-Z0-9]) ]]; then
+        # Handle OR operator between conditions
+        subconditions=($condition)
+        for subcond in "${subconditions[@]}"; do
+            if [[ $subcond =~ ^([a-zA-Z0-9_]+)([!=<>]=?|=)(.+)$ ]]; then
+                column="${BASH_REMATCH[1]}"
+                operator="${BASH_REMATCH[2]}"
+                value="${BASH_REMATCH[3]}"
+
+                match_col $column
+                type=$(get_type $value)
+                if [[ "$col_type" != "$type" ]]; then
+                    echo "Unmatched data types: Please check entered values"
+                    exit 1
+                fi
+                if [[ "$operator" == "=" ]]; then
+                    operator='=='
+                fi
+                column=${col_number}
+                [[ -n $conditions ]] && conditions="$conditions || "
+                conditions="$conditions \$$column $operator \"$value\""
+
+            elif [[ "$subcond" != "OR" ]]; then
+                echo "invalid input"
+                exit 1 
+            fi
+            done
+        select_by_col
+    # Process a single condition without AND/OR operator
+    elif [[ $condition =~ ^([a-zA-Z0-9_]+)([!=<>]=?|=)([a-zA-Z0-9_]+)$ ]]; then
+        
+        column="${BASH_REMATCH[1]}"
+        operator="${BASH_REMATCH[2]}"
+        value="${BASH_REMATCH[3]}"
+        match_col $column
+        type=$(get_type $value)
+        if [[ "$col_type" != "$type" ]]; then
+            echo "Unmatched data types: Please check entered values"
+            exit 1
+        fi
+        if [[ "$operator" == "=" ]]; then
+                operator='=='
+            fi
+        column=$col_number
+        [[ -n $conditions ]] && conditions="$conditions && "
+        conditions="$conditions \$${column} $operator \"$value\""
+        
+        select_by_col
+
+    else
+        echo "invalid input"
+    fi
+    
+fi
+
+
+
